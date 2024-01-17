@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use nom::{IResult, branch::alt, bytes::complete::tag};
+use nom::{IResult, branch::alt, bytes::complete::tag, combinator::value};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum HoconValue {
     HoconString(String),
     HoconNumber(f64),
@@ -17,6 +17,12 @@ fn null<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
     Ok((input, HoconValue::HoconNull))
 }
 
+fn boolean<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+    let parse_true = value(HoconValue::HoconBoolean(true), tag("true"));
+    let parse_false = value(HoconValue::HoconBoolean(false), tag("false"));
+    alt((parse_true, parse_false))(input)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -26,6 +32,16 @@ mod tests {
     #[test]
     fn test_null() {
         assert_eq!(null("null"), Ok(("", HoconValue::HoconNull)));
+    }
+
+    #[test]
+    fn test_boolean_true() {
+        assert_eq!(boolean("true"), Ok(("", HoconValue::HoconBoolean(true))));
+    }
+
+    #[test]
+    fn test_boolean_false() {
+        assert_eq!(boolean("false"), Ok(("", HoconValue::HoconBoolean(false))));
     }
 
 }
