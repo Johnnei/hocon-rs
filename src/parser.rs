@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_while},
+    bytes::complete::{escaped, tag, take_while},
+    character::complete::{alphanumeric0, char},
     combinator::value,
+    sequence::delimited,
     IResult,
 };
 
@@ -44,6 +46,14 @@ fn whitespace<'a>(input: &'a str) -> IResult<&'a str, ()> {
     Ok((input, ()))
 }
 
+fn string<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
+    fn parse_str<'a>(input: &'a str) -> IResult<&'a str, &str> {
+        alphanumeric0(input)
+    }
+
+    delimited(char('"'), parse_str, char('"'))(input)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -68,5 +78,10 @@ mod tests {
     #[test]
     fn test_whitespace() {
         assert_eq!(whitespace("     test"), Ok(("test", ())));
+    }
+
+    #[test]
+    fn test_string() {
+        assert_eq!(string("\"test\""), Ok(("", "test")));
     }
 }
