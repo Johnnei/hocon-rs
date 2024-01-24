@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use nom::{
     branch::alt,
-    bytes::complete::{escaped, tag, take_while},
+    bytes::complete::{tag, take_while},
     character::complete::{alphanumeric0, char},
-    combinator::value,
-    sequence::delimited,
+    combinator::{value, peek, map},
+    sequence::{delimited, Tuple},
     IResult,
 };
 
@@ -51,7 +51,35 @@ fn string<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
         alphanumeric0(input)
     }
 
-    delimited(char('"'), parse_str, char('"'))(input)
+    alt((
+        delimited(char('"'), parse_str, char('"')),
+        parse_str
+    ))(input)
+
+}
+
+fn parse_value<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+    alt((
+        boolean,
+        map(string, |s| HoconValue::HoconString(s.to_string()))
+    ))(input)
+}
+
+fn key_value<'a>(input: &'a str) -> IResult<&'a str, (&'a str, HoconValue)> {
+
+    fn separator<'a>(input: &'a str) -> IResult<&'a str, ()> {
+        map(
+            alt((
+                char(':'),
+                char('='),
+                peek(char('{'))
+            )),
+            |_| ()
+        )(input)
+    }
+
+    let (input, (path, _, _, _, value)) = (string, whitespace, separator, whitespace, parse_value).parse(input)?;
+    Ok((input, (path, value)))
 }
 
 #[cfg(test)]
@@ -82,6 +110,16 @@ mod tests {
 
     #[test]
     fn test_string() {
+        assert_eq!(string("test"), Ok(("", "test")));
+    }
+
+    #[test]
+    fn test_quoted_string() {
         assert_eq!(string("\"test\""), Ok(("", "test")));
+    }
+
+    #[test]
+    fn test_key_value() {
+        assert_eq!(key_value("test = true"), Ok(("", ("test", HoconValue::HoconBoolean(true)))));
     }
 }
