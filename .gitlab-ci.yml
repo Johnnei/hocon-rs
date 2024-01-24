@@ -1,0 +1,22 @@
+stages:
+  - build
+  - test
+
+default:
+  image: "registry.johnnei.org:443/docker-images/rust:latest"
+
+build:
+  stage: build
+  script:
+    - cargo build --release
+  cache:
+    key:
+      files:
+        - Cargo.lock
+    paths:
+      - target/release/**
+
+test:
+  stage: test
+  script:
+    - cargo nextest r
