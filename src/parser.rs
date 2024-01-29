@@ -5,9 +5,10 @@ use nom::{
     bytes::complete::{tag, take_while},
     character::complete::{alphanumeric0, char},
     combinator::{value, peek, map},
-    sequence::{delimited, Tuple},
-    IResult,
+    sequence::{delimited, Tuple, tuple},
+    IResult, multi::many0
 };
+use thiserror::Error;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum HoconValue {
@@ -17,6 +18,22 @@ pub enum HoconValue {
     HoconArray(Vec<HoconValue>),
     HoconBoolean(bool),
     HoconNull,
+}
+
+#[derive(Error, Debug, PartialEq)]
+pub enum HoconError {
+    #[error("Parse error")]
+    ParseError
+}
+
+pub fn parse<'a>(input: &'a str) -> Result<HoconValue, HoconError> {
+    let r = parse_object(input);
+    match r {
+        Ok((_, value)) => {
+            Ok(value)
+        },
+        Err(_) => Err(HoconError::ParseError)
+    }
 }
 
 fn null<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
@@ -60,6 +77,7 @@ fn string<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
 
 fn parse_value<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
     alt((
+        null,
         boolean,
         map(string, |s| HoconValue::HoconString(s.to_string()))
     ))(input)
@@ -80,6 +98,24 @@ fn key_value<'a>(input: &'a str) -> IResult<&'a str, (&'a str, HoconValue)> {
 
     let (input, (path, _, _, _, value)) = (string, whitespace, separator, whitespace, parse_value).parse(input)?;
     Ok((input, (path, value)))
+}
+
+fn parse_object_inner<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+    map(many0(key_value), |kvs| {
+        let mut map = HashMap::new();
+        for (k, v) in kvs {
+            map.insert(k.to_owned(), v.to_owned());
+        }
+        HoconValue::HoconObject(map)
+    })(input)
+}
+
+fn parse_object<'a>(input: &'a str) ->IResult<&'a str, HoconValue> {
+    delimited(
+        tuple((char('{'), whitespace)),
+        parse_object_inner,
+        tuple((whitespace, char('}')))
+    )(input)
 }
 
 #[cfg(test)]
@@ -121,5 +157,16 @@ mod tests {
     #[test]
     fn test_key_value() {
         assert_eq!(key_value("test = true"), Ok(("", ("test", HoconValue::HoconBoolean(true)))));
+    }
+
+    #[test]
+    fn parse_basic_json_object() {
+        let content = r#"{ "hello": "world" }"#;
+        let mut expected_map = HashMap::new();
+        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
+        assert_eq!(
+            parse(&content),
+            Ok(HoconValue::HoconObject(expected_map))
+        );
     }
 }
