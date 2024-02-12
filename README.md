@@ -1,12 +1,12 @@
 # hocon-rs
 
-Hocon parser libary for rust.
+Hocon parser library for rust.
 
 Very much a work in progress.
 
 ## Support Hocon Features
 - [x] Objects
-- [ ] Arrays
+- [x] Arrays
 - [x] Boolean
 - [x] Strings
 - [x] Numbers

@@ -1,10 +1,18 @@
 use std::collections::HashMap;
 
 use nom::{
-    branch::alt, bytes::complete::{tag, take_while}, character::complete::{alphanumeric0, char}, combinator::{map, peek, value}, multi::{many0, many_m_n}, sequence::{delimited, tuple, Tuple}, IResult
+    branch::alt,
+    bytes::complete::{tag, take_while},
+    character::complete::{alphanumeric0, alphanumeric1, char},
+    combinator::{map, peek, value},
+    multi::{many0, many1, many_m_n},
+    number::complete::double,
+    sequence::{delimited, tuple, Tuple},
+    IResult,
 };
 use thiserror::Error;
 
+/// Represents a hocon value within the AST representation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HoconValue {
     HoconString(String),
@@ -15,19 +23,20 @@ pub enum HoconValue {
     HoconNull,
 }
 
+/// Represents the various modes of failure while parsing or evaluating hocon files.
 #[derive(Error, Debug, PartialEq)]
 pub enum HoconError {
+    // TODO Integrate better with nom error to get better parsing error docs
     #[error("Parse error")]
-    ParseError
+    ParseError,
 }
 
+/// Parses the given input as a Hocon document into a Hocon AST.
 pub fn parse<'a>(input: &'a str) -> Result<HoconValue, HoconError> {
     let r = parse_object(input);
     match r {
-        Ok((_, value)) => {
-            Ok(value)
-        },
-        Err(_) => Err(HoconError::ParseError)
+        Ok((_, value)) => Ok(value),
+        Err(_) => Err(HoconError::ParseError),
     }
 }
 
@@ -63,60 +72,77 @@ fn string<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
         alphanumeric0(input)
     }
 
-    alt((
-        delimited(char('"'), parse_str, char('"')),
-        parse_str
-    ))(input)
+    alt((delimited(char('"'), parse_str, char('"')), alphanumeric1))(input)
+}
 
+fn number<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+    map(double, |num| HoconValue::HoconNumber(num))(input)
 }
 
 fn parse_value<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
     alt((
         null,
         boolean,
-        map(string, |s| HoconValue::HoconString(s.to_string()))
+        number,
+        map(string, |s| HoconValue::HoconString(s.to_string())),
+        array,
+        parse_object,
     ))(input)
 }
 
 fn next_element_whitespace<'a>(input: &'a str) -> IResult<&'a str, ()> {
-    map(
-        tuple((whitespace, many_m_n(0, 1, char(',')))),
-        |_| ()
-    )(input)
+    map(tuple((whitespace, many_m_n(0, 1, char(',')))), |_| ())(input)
 }
 
 fn key_value<'a>(input: &'a str) -> IResult<&'a str, (&'a str, HoconValue)> {
-
     fn separator<'a>(input: &'a str) -> IResult<&'a str, ()> {
-        map(
-            alt((
-                char(':'),
-                char('='),
-                peek(char('{'))
-            )),
-            |_| ()
-        )(input)
+        map(alt((char(':'), char('='), peek(char('{')))), |_| ())(input)
     }
 
-    let (input, (_, path, _, _, _, value, _)) = (whitespace, string, whitespace, separator, whitespace, parse_value, next_element_whitespace).parse(input)?;
+    let (input, (_, path, _, _, _, value, _)) = (
+        whitespace,
+        string,
+        whitespace,
+        separator,
+        whitespace,
+        parse_value,
+        next_element_whitespace,
+    )
+        .parse(input)?;
     Ok((input, (path, value)))
 }
 
-fn parse_object_inner<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
-    map(many0(key_value), |kvs| {
-        let mut map = HashMap::new();
-        for (k, v) in kvs {
-            map.insert(k.to_owned(), v.to_owned());
-        }
-        HoconValue::HoconObject(map)
-    })(input)
+fn array<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+    fn array_element(input: &str) -> IResult<&str, HoconValue> {
+        let (input, (_, value, _)) = (whitespace, parse_value, next_element_whitespace).parse(input)?;
+        Ok((input, value))
+    }
+
+    delimited(
+        char('['),
+        map(many0(array_element), |elements| HoconValue::HoconArray(elements)),
+        char(']'),
+    )(input)
 }
 
-fn parse_object<'a>(input: &'a str) ->IResult<&'a str, HoconValue> {
-    alt((
-        delimited(char('{'), parse_object_inner, char('}')),
-        parse_object_inner
-    ))(input)
+fn parse_object<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+    fn to_map<'a>(kvs: Vec<(&'a str, HoconValue)>) -> HoconValue {
+        let mut map = HashMap::new();
+        for (k, v) in kvs {
+            map.insert(k.to_owned(), v);
+        }
+        HoconValue::HoconObject(map)
+    }
+
+    fn parse_inner0<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+        map(many0(key_value), to_map)(input)
+    }
+
+    fn parse_inner1<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
+        map(many1(key_value), to_map)(input)
+    }
+
+    alt((delimited(char('{'), parse_inner0, char('}')), parse_inner1))(input)
 }
 
 #[cfg(test)]
@@ -157,7 +183,35 @@ mod tests {
 
     #[test]
     fn test_key_value() {
-        assert_eq!(key_value("test = true"), Ok(("", ("test", HoconValue::HoconBoolean(true)))));
+        assert_eq!(
+            key_value("test = true"),
+            Ok(("", ("test", HoconValue::HoconBoolean(true))))
+        );
+    }
+
+    #[test]
+    fn test_number() {
+        assert_eq!(number("42"), Ok(("", HoconValue::HoconNumber(42f64))));
+    }
+
+    #[test]
+    fn test_array() {
+        let expected_data = vec![
+            HoconValue::HoconNumber(1f64),
+            HoconValue::HoconNumber(2f64),
+            HoconValue::HoconNumber(3f64),
+        ];
+        assert_eq!(array("[1,2,3]"), Ok(("", HoconValue::HoconArray(expected_data))));
+    }
+
+    #[test]
+    fn test_array_trailing_comma() {
+        let expected_data = vec![
+            HoconValue::HoconNumber(1f64),
+            HoconValue::HoconNumber(2f64),
+            HoconValue::HoconNumber(3f64),
+        ];
+        assert_eq!(array("[1,2,3,]"), Ok(("", HoconValue::HoconArray(expected_data))));
     }
 
     #[test]
@@ -165,10 +219,7 @@ mod tests {
         let content = r#"{ "hello": "world" }"#;
         let mut expected_map = HashMap::new();
         expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
-        assert_eq!(
-            parse(&content),
-            Ok(HoconValue::HoconObject(expected_map))
-        );
+        assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 
     #[test]
@@ -177,10 +228,7 @@ mod tests {
         let mut expected_map = HashMap::new();
         expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
         expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
-        assert_eq!(
-            parse(&content),
-            Ok(HoconValue::HoconObject(expected_map))
-        );
+        assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 
     #[test]
@@ -192,10 +240,7 @@ mod tests {
         let mut expected_map = HashMap::new();
         expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
         expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
-        assert_eq!(
-            parse(&content),
-            Ok(HoconValue::HoconObject(expected_map))
-        );
+        assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 
     #[test]
@@ -207,9 +252,6 @@ mod tests {
         let mut expected_map = HashMap::new();
         expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
         expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
-        assert_eq!(
-            parse(&content),
-            Ok(HoconValue::HoconObject(expected_map))
-        );
+        assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 }
