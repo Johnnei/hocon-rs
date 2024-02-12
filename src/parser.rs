@@ -1,12 +1,7 @@
 use std::collections::HashMap;
 
 use nom::{
-    branch::alt,
-    bytes::complete::{tag, take_while},
-    character::complete::{alphanumeric0, char},
-    combinator::{value, peek, map},
-    sequence::{delimited, Tuple, tuple},
-    IResult, multi::many0
+    branch::alt, bytes::complete::{tag, take_while}, character::complete::{alphanumeric0, char}, combinator::{map, peek, value}, multi::{many0, many_m_n}, sequence::{delimited, tuple, Tuple}, IResult
 };
 use thiserror::Error;
 
@@ -83,6 +78,13 @@ fn parse_value<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
     ))(input)
 }
 
+fn next_element_whitespace<'a>(input: &'a str) -> IResult<&'a str, ()> {
+    map(
+        tuple((whitespace, many_m_n(0, 1, char(',')))),
+        |_| ()
+    )(input)
+}
+
 fn key_value<'a>(input: &'a str) -> IResult<&'a str, (&'a str, HoconValue)> {
 
     fn separator<'a>(input: &'a str) -> IResult<&'a str, ()> {
@@ -96,7 +98,7 @@ fn key_value<'a>(input: &'a str) -> IResult<&'a str, (&'a str, HoconValue)> {
         )(input)
     }
 
-    let (input, (path, _, _, _, value)) = (string, whitespace, separator, whitespace, parse_value).parse(input)?;
+    let (input, (_, path, _, _, _, value, _)) = (whitespace, string, whitespace, separator, whitespace, parse_value, next_element_whitespace).parse(input)?;
     Ok((input, (path, value)))
 }
 
@@ -111,11 +113,10 @@ fn parse_object_inner<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
 }
 
 fn parse_object<'a>(input: &'a str) ->IResult<&'a str, HoconValue> {
-    delimited(
-        tuple((char('{'), whitespace)),
-        parse_object_inner,
-        tuple((whitespace, char('}')))
-    )(input)
+    alt((
+        delimited(char('{'), parse_object_inner, char('}')),
+        parse_object_inner
+    ))(input)
 }
 
 #[cfg(test)]
@@ -164,6 +165,48 @@ mod tests {
         let content = r#"{ "hello": "world" }"#;
         let mut expected_map = HashMap::new();
         expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
+        assert_eq!(
+            parse(&content),
+            Ok(HoconValue::HoconObject(expected_map))
+        );
+    }
+
+    #[test]
+    fn parse_json_object_with_two_keys() {
+        let content = r#"{ "hello": "world", "world": "hello" }"#;
+        let mut expected_map = HashMap::new();
+        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
+        expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
+        assert_eq!(
+            parse(&content),
+            Ok(HoconValue::HoconObject(expected_map))
+        );
+    }
+
+    #[test]
+    fn parse_json_object_with_two_keys_multiline() {
+        let content = r#"{
+            "hello": "world",
+            "world": "hello"
+        }"#;
+        let mut expected_map = HashMap::new();
+        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
+        expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
+        assert_eq!(
+            parse(&content),
+            Ok(HoconValue::HoconObject(expected_map))
+        );
+    }
+
+    #[test]
+    fn parse_hocon_object_with_two_keys() {
+        let content = r#"
+            hello: "world"
+            world: "hello"
+        }"#;
+        let mut expected_map = HashMap::new();
+        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
+        expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
         assert_eq!(
             parse(&content),
             Ok(HoconValue::HoconObject(expected_map))
