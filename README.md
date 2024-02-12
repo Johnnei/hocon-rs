@@ -12,8 +12,8 @@ Very much a work in progress.
 - [x] Numbers
 - [x] Null
 - [ ] Includes
-- [ ] Subsitutions
+- [ ] Substitution
 - [ ] Comments
 
-## Crate Integrationgs
+## Crate Integrations
 - [ ] Serde
