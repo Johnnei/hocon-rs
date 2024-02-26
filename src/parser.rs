@@ -12,13 +12,18 @@ use nom::{
 };
 use thiserror::Error;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoconObject<'a> {
+    pub data: HashMap<String, HoconValue<'a>>
+}
+
 /// Represents a hocon value within the AST representation.
 #[derive(Clone, Debug, PartialEq)]
-pub enum HoconValue {
-    HoconString(String),
+pub enum HoconValue<'a> {
+    HoconString(&'a str),
     HoconNumber(f64),
-    HoconObject(HashMap<String, HoconValue>),
-    HoconArray(Vec<HoconValue>),
+    HoconObject(HashMap<&'a str, HoconValue<'a>>),
+    HoconArray(Vec<HoconValue<'a>>),
     HoconBoolean(bool),
     HoconNull,
 }
@@ -32,7 +37,7 @@ pub enum HoconError {
 }
 
 /// Parses the given input as a Hocon document into a Hocon AST.
-pub fn parse<'a>(input: &'a str) -> Result<HoconValue, HoconError> {
+pub fn parse<'a>(input: &'a str) -> Result<HoconValue<'a>, HoconError> {
     let r = parse_object(input);
     match r {
         Ok((_, value)) => Ok(value),
@@ -84,7 +89,7 @@ fn parse_value<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
         null,
         boolean,
         number,
-        map(string, |s| HoconValue::HoconString(s.to_string())),
+        map(string, |s| HoconValue::HoconString(s)),
         array,
         parse_object,
     ))(input)
@@ -125,11 +130,11 @@ fn array<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
     )(input)
 }
 
-fn parse_object<'a>(input: &'a str) -> IResult<&'a str, HoconValue> {
-    fn to_map<'a>(kvs: Vec<(&'a str, HoconValue)>) -> HoconValue {
+fn parse_object<'a>(input: &'a str) -> IResult<&'a str, HoconValue<'a>> {
+    fn to_map<'a>(kvs: Vec<(&'a str, HoconValue<'a>)>) -> HoconValue<'a> {
         let mut map = HashMap::new();
         for (k, v) in kvs {
-            map.insert(k.to_owned(), v);
+            map.insert(k, v);
         }
         HoconValue::HoconObject(map)
     }
@@ -218,7 +223,7 @@ mod tests {
     fn parse_basic_json_object() {
         let content = r#"{ "hello": "world" }"#;
         let mut expected_map = HashMap::new();
-        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
+        expected_map.insert("hello", HoconValue::HoconString("world"));
         assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 
@@ -226,8 +231,8 @@ mod tests {
     fn parse_json_object_with_two_keys() {
         let content = r#"{ "hello": "world", "world": "hello" }"#;
         let mut expected_map = HashMap::new();
-        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
-        expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
+        expected_map.insert("hello", HoconValue::HoconString("world"));
+        expected_map.insert("world", HoconValue::HoconString("hello"));
         assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 
@@ -238,8 +243,8 @@ mod tests {
             "world": "hello"
         }"#;
         let mut expected_map = HashMap::new();
-        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
-        expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
+        expected_map.insert("hello", HoconValue::HoconString("world"));
+        expected_map.insert("world", HoconValue::HoconString("hello"));
         assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 
@@ -250,8 +255,8 @@ mod tests {
             world: "hello"
         }"#;
         let mut expected_map = HashMap::new();
-        expected_map.insert("hello".to_string(), HoconValue::HoconString("world".to_string()));
-        expected_map.insert("world".to_string(), HoconValue::HoconString("hello".to_string()));
+        expected_map.insert("hello", HoconValue::HoconString("world"));
+        expected_map.insert("world", HoconValue::HoconString("hello"));
         assert_eq!(parse(&content), Ok(HoconValue::HoconObject(expected_map)));
     }
 }
