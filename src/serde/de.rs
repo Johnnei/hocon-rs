@@ -1,23 +1,24 @@
 use core::fmt;
 
+use nom::error::VerboseError;
 use serde::de::{self, DeserializeOwned, Deserializer, MapAccess, Visitor};
 
-use crate::parser::{HoconError, HoconValue};
+use crate::parser::{HoconError, HoconField, HoconValue};
 
 impl serde::de::Error for HoconError {
-    fn custom<T: fmt::Display>(_: T) -> Self {
-        HoconError::ParseError
+    fn custom<T: fmt::Display>(e: T) -> Self {
+        HoconError::ParseError { msg: e.to_string() }
     }
 }
 
 struct HoconObjectIter<'a, 'de: 'a> {
     de: &'a mut HoconDeserializer<'de>,
-    current: Option<&'de str>,
+    first: bool,
 }
 
 impl<'a, 'de> HoconObjectIter<'a, 'de> {
     pub fn new(de: &'a mut HoconDeserializer<'de>) -> Self {
-        HoconObjectIter { de, current: None }
+        HoconObjectIter { de, first: true }
     }
 }
 
@@ -29,18 +30,22 @@ impl<'de, 'a> MapAccess<'de> for HoconObjectIter<'a, 'de> {
         K: de::DeserializeSeed<'de>,
     {
         match &mut self.de.input {
-            HoconValue::HoconObject(map) => {
-                if let Some(last_key) = self.current.take() {
-                    map.remove(last_key);
+            HoconValue::HoconObject(elements) => {
+                if !self.first {
+                    elements.remove(0);
+                } else {
+                    self.first = false;
                 }
-                if map.is_empty() {
+
+                if elements.is_empty() {
                     Ok(None)
                 } else {
-                    self.current = map.keys().next().take().map(|s| s.to_owned());
                     seed.deserialize(&mut *self.de).map(Some)
                 }
             }
-            _ => Err(HoconError::ParseError),
+            _ => Err(HoconError::ParseError {
+                msg: "Expected object type".to_owned(),
+            }),
         }
     }
 
@@ -50,18 +55,20 @@ impl<'de, 'a> MapAccess<'de> for HoconObjectIter<'a, 'de> {
     {
         match &mut self.de.input {
             HoconValue::HoconObject(map) => {
-                if let Some(key) = self.current.take() {
-                    if let Some(value) = map.remove(key) {
-                        let mut value_deser = HoconDeserializer { input: value };
-                        seed.deserialize(&mut value_deser)
-                    } else {
-                        Err(HoconError::ParseError)
-                    }
+                if let Some(HoconField::KeyValue(_, value)) = map.first() {
+                    let mut value_deser = HoconDeserializer {
+                        input: value.to_owned(),
+                    };
+                    seed.deserialize(&mut value_deser)
                 } else {
-                    Err(HoconError::ParseError)
+                    Err(HoconError::ParseError {
+                        msg: "Expected non-empty map".to_owned(),
+                    })
                 }
             }
-            _ => Err(HoconError::ParseError)
+            _ => Err(HoconError::ParseError {
+                msg: "Expcected object type".to_owned(),
+            }),
         }
     }
 }
@@ -72,12 +79,12 @@ pub struct HoconDeserializer<'de> {
 
 impl<'de> HoconDeserializer<'de> {
     pub fn from_str(input: &'de str) -> Result<Self, HoconError> {
-        let input = crate::parser::parse(input)?;
+        let input = crate::parser::parse::<VerboseError<&'de str>>(input)?;
         Ok(HoconDeserializer { input })
     }
 }
 
-pub fn from_str<'a, T>(s: &'a str) -> Result<T, HoconError>
+pub fn from_str<T>(s: &str) -> Result<T, HoconError>
 where
     // TODO: Figure out why lifetime doesn't outlast the deserializer when not using the owned
     //       type.
@@ -194,7 +201,9 @@ impl<'de, 'a> Deserializer<'de> for &'a mut HoconDeserializer<'de> {
     {
         match self.input {
             HoconValue::HoconString(value) => visitor.visit_borrowed_str(value),
-            _ => Err(HoconError::ParseError),
+            _ => Err(HoconError::ParseError {
+                msg: "Expected string type".to_owned(),
+            }),
         }
     }
 
@@ -270,7 +279,9 @@ impl<'de, 'a> Deserializer<'de> for &'a mut HoconDeserializer<'de> {
                 let object_iter = HoconObjectIter::new(self);
                 visitor.visit_map(object_iter)
             }
-            _ => Err(HoconError::ParseError),
+            _ => Err(HoconError::ParseError {
+                msg: "Expected object type".to_owned(),
+            }),
         }
     }
 
@@ -303,11 +314,15 @@ impl<'de, 'a> Deserializer<'de> for &'a mut HoconDeserializer<'de> {
         V: Visitor<'de>,
     {
         match &mut self.input {
-            HoconValue::HoconObject(ref mut map) => match map.keys().next().take().map(|s| s.to_owned()) {
-                Some(key) => visitor.visit_borrowed_str(key),
-                _ => Err(HoconError::ParseError),
+            HoconValue::HoconObject(ref mut map) => match map.first().take().map(|s| s.to_owned()) {
+                Some(HoconField::KeyValue(key, _)) => visitor.visit_borrowed_str(key),
+                _ => Err(HoconError::ParseError {
+                    msg: "Expected non-empty object".to_owned(),
+                }),
             },
-            _ => Err(HoconError::ParseError),
+            _ => Err(HoconError::ParseError {
+                msg: "Expected object type".to_owned(),
+            }),
         }
     }
 
