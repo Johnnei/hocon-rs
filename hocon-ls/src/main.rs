@@ -1,7 +1,9 @@
-use std::error::Error;
+use std::{collections::HashMap, error::Error};
 
-use lsp_server::{Connection, ExtractError, Message, Request, RequestId, Response};
-use lsp_types::{request::GotoDefinition, GotoDefinitionResponse, InitializeParams, OneOf, ServerCapabilities};
+use hocon_rs::parser::{parse, HoconValue};
+use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
+use lsp_types::{notification::DidOpenTextDocument, request::GotoDefinition, GotoDefinitionResponse, InitializeParams, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind};
+use nom::error::VerboseError;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -14,6 +16,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     // Run the server and wait for the two threads to end (typically by trigger LSP Exit event).
     let server_capabilities = serde_json::to_value(ServerCapabilities {
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     })
@@ -40,6 +43,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
     eprintln!("starting example main loop");
     for msg in &connection.receiver {
         eprintln!("got msg: {msg:?}");
+        let mut open_files: HashMap<String, HoconValue> = HashMap::new();
         match msg {
             Message::Request(req) => {
                 if connection.handle_shutdown(&req)? {
@@ -68,11 +72,35 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
                 eprintln!("got response: {resp:?}");
             }
             Message::Notification(not) => {
-                eprintln!("got notification: {not:?}");
+                match cast_notification::<DidOpenTextDocument>(not) {
+                    Ok(params) => {
+                        eprintln!("opened file: {params:?}");
+                        match parse::<VerboseError<&str>>(&params.text_document.text) {
+                            Ok(value) => {
+                                open_files.insert(params.text_document.uri.path().to_string(), value);
+                            },
+                            Err(err) => {
+                                let path = params.text_document.uri.path();
+                                eprintln!("parse failure on {path:?}: {err:?}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("got notification: {err:?}");
+                    }
+                }
             }
         }
     }
     Ok(())
+}
+
+fn cast_notification<R>(not: lsp_server::Notification) -> Result<R::Params, ExtractError<Notification>>
+where
+    R: lsp_types::notification::Notification,
+    R::Params: serde::de::DeserializeOwned,
+{
+    not.extract(R::METHOD)
 }
 
 fn cast<R>(req: Request) -> Result<(RequestId, R::Params), ExtractError<Request>>
