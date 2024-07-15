@@ -4,8 +4,8 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while},
     character::complete::char,
-    combinator::{map, peek, value},
-    error::{convert_error, ErrorKind, ParseError, VerboseError},
+    combinator::{all_consuming, map, peek, value},
+    error::{convert_error, ErrorKind, ParseError},
     multi::{many0, many1, many_m_n},
     number::complete::double,
     sequence::{delimited, tuple, Tuple},
@@ -53,7 +53,7 @@ pub enum HoconError {
 
 /// Parses the given input as a Hocon document into a Hocon AST.
 pub fn parse<'a, E: ParseError<&'a str>>(input: &'a str) -> Result<HoconValue<'a>, HoconError> {
-    let r = parse_object::<VerboseError<&str>>(input);
+    let r = alt((empty_content, parse_object))(input);
     match r {
         Ok((_, value)) => Ok(value),
         Err(nom::Err::Error(e)) => {
@@ -64,6 +64,10 @@ pub fn parse<'a, E: ParseError<&'a str>>(input: &'a str) -> Result<HoconValue<'a
             msg: "Unknown error".to_string(),
         }),
     }
+}
+
+fn empty_content<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue, E> {
+    map(all_consuming(whitespace), |_| HoconValue::HoconObject(vec![]))(input)
 }
 
 fn null<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue, E> {
@@ -370,6 +374,29 @@ mod tests {
             "hello",
             HoconValue::HoconInclude(HoconInclusion::File("test.conf")),
         )];
+        assert_eq!(
+            parse::<VerboseError<&str>>(content),
+            Ok(HoconValue::HoconObject(expected))
+        );
+    }
+
+    #[test]
+    fn parse_empty_line() {
+        assert_eq!(empty_content::<VerboseError<&str>>(""), Ok(("", HoconValue::HoconObject(vec![]))));
+        assert_eq!(parse::<VerboseError<&str>>(""), Ok(HoconValue::HoconObject(vec![])));
+    }
+
+    #[test]
+    fn parse_empty_line_whitespace() {
+        assert_eq!(parse::<VerboseError<&str>>("   "), Ok(HoconValue::HoconObject(vec![])));
+    }
+
+    #[test]
+    fn parse_empty_multiline() {
+        let content = r#"
+
+        "#;
+        let expected = vec![];
         assert_eq!(
             parse::<VerboseError<&str>>(content),
             Ok(HoconValue::HoconObject(expected))
