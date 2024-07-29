@@ -4,6 +4,9 @@ use hocon_rs::parser::{parse, HoconValue};
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{notification::DidOpenTextDocument, request::GotoDefinition, GotoDefinitionResponse, InitializeParams, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind};
 use nom::error::VerboseError;
+use workspace::Workspace;
+
+mod workspace;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -42,8 +45,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
     let _params: InitializeParams = serde_json::from_value(params).unwrap();
     eprintln!("starting example main loop");
     for msg in &connection.receiver {
-        eprintln!("got msg: {msg:?}");
-        let mut open_files: HashMap<String, HoconValue> = HashMap::new();
+        let mut workspace = Workspace::new();
         match msg {
             Message::Request(req) => {
                 if connection.handle_shutdown(&req)? {
@@ -75,9 +77,8 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
                 match cast_notification::<DidOpenTextDocument>(not) {
                     Ok(params) => {
                         eprintln!("opened file: {params:?}");
-                        match parse::<VerboseError<&str>>(&params.text_document.text) {
-                            Ok(value) => {
-                                open_files.insert(params.text_document.uri.path().to_string(), value);
+                        match workspace.open_file(params.text_document.uri.path().to_string(), params.text_document.text) {
+                            Ok(()) => {
                             },
                             Err(err) => {
                                 let path = params.text_document.uri.path();
