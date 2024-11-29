@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_while},
-    character::complete::char,
+    bytes::complete::{tag, take, take_till1, take_while, take_while_m_n},
+    character::{complete::{char, none_of}, is_hex_digit},
     combinator::{all_consuming, map, peek, value},
     error::{convert_error, ErrorKind, ParseError},
-    multi::{many0, many1, many_m_n},
+    multi::{count, fold_many1, many0, many1, many_m_n},
     number::complete::double,
-    sequence::{delimited, tuple, Tuple},
+    sequence::{delimited, preceded, tuple, Tuple},
     AsChar, IResult, InputTakeAtPosition,
 };
 use thiserror::Error;
@@ -81,19 +81,21 @@ fn boolean<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, Hocon
     alt((parse_true, parse_false))(input)
 }
 
+fn is_hocon_whitespace(c: char) -> bool {
+    c.is_whitespace()
+        || c == '\t'
+        || c == '\n'
+        || c == '\u{000B}'
+        || c == '\u{000C}'
+        || c == '\r'
+        || c == '\u{001C}'
+        || c == '\u{001D}'
+        || c == '\u{001E}'
+        || c == '\u{001F}'
+}
+
 fn whitespace<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (), E> {
-    let (input, _) = take_while(|c: char| {
-        c.is_whitespace()
-            || c == '\t'
-            || c == '\n'
-            || c == '\u{000B}'
-            || c == '\u{000C}'
-            || c == '\r'
-            || c == '\u{001C}'
-            || c == '\u{001D}'
-            || c == '\u{001E}'
-            || c == '\u{001F}'
-    })(input)?;
+    let (input, _) = take_while(is_hocon_whitespace)(input)?;
     Ok((input, ()))
 }
 
@@ -106,11 +108,36 @@ fn string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a st
         input.split_at_position_complete(is_string_char)
     }
 
-    fn parse_str1<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-        input.split_at_position1_complete(is_string_char, ErrorKind::AlphaNumeric)
+    fn parse_unquoted_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
+        take_till1(|c: char| {
+            is_hocon_whitespace(c)
+                || c == '$'
+                || c == '"'
+                || c == '{'
+                || c == '}'
+                || c == '['
+                || c == ']'
+                || c == ':'
+                || c == '='
+                || c == ','
+                || c == '+'
+                || c == '#'
+                || c == '`'
+                || c == '^'
+                || c == '?'
+                || c == '!'
+                || c == '@'
+                || c == '*'
+                || c == '&'
+                || c == '\\'
+        })(input)
     }
 
-    alt((delimited(char('"'), parse_str, char('"')), parse_str1))(input)
+    fn parse_json_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
+        delimited(tag("\""), parse_str, tag("\""))(input)
+    }
+
+    alt((parse_json_string, parse_unquoted_string))(input)
 }
 
 fn number<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue, E> {
@@ -382,7 +409,10 @@ mod tests {
 
     #[test]
     fn parse_empty_line() {
-        assert_eq!(empty_content::<VerboseError<&str>>(""), Ok(("", HoconValue::HoconObject(vec![]))));
+        assert_eq!(
+            empty_content::<VerboseError<&str>>(""),
+            Ok(("", HoconValue::HoconObject(vec![])))
+        );
         assert_eq!(parse::<VerboseError<&str>>(""), Ok(HoconValue::HoconObject(vec![])));
     }
 
