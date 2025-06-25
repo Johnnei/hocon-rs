@@ -3,7 +3,7 @@ use core::fmt;
 use nom::error::VerboseError;
 use serde::de::{self, DeserializeOwned, Deserializer, MapAccess, Visitor};
 
-use crate::parser::{HoconError, HoconField, HoconValue};
+use crate::parser::{HoconError, HoconField, HoconString, HoconValue};
 
 impl serde::de::Error for HoconError {
     fn custom<T: fmt::Display>(e: T) -> Self {
@@ -200,7 +200,8 @@ impl<'de, 'a> Deserializer<'de> for &'a mut HoconDeserializer<'de> {
         V: Visitor<'de>,
     {
         match self.input {
-            HoconValue::HoconString(value) => visitor.visit_borrowed_str(value),
+            HoconValue::HoconString(HoconString::Quoted(value)) => visitor.visit_borrowed_str(value),
+            HoconValue::HoconString(HoconString::Unqouted(value)) => visitor.visit_borrowed_str(value),
             _ => Err(HoconError::ParseError {
                 msg: "Expected string type".to_owned(),
             }),

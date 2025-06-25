@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take, take_till1, take_while, take_while_m_n},
-    character::{complete::{char, none_of}, is_hex_digit},
+    bytes::complete::{tag, take_till1, take_while},
+    character::complete::char,
     combinator::{all_consuming, map, peek, value},
-    error::{convert_error, ErrorKind, ParseError},
-    multi::{count, fold_many1, many0, many1, many_m_n},
+    error::{convert_error, ParseError},
+    multi::{many0, many1, many_m_n},
     number::complete::double,
-    sequence::{delimited, preceded, tuple, Tuple},
+    sequence::{delimited, tuple, Tuple},
     AsChar, IResult, InputTakeAtPosition,
 };
 use thiserror::Error;
@@ -31,10 +31,16 @@ pub enum HoconField<'a> {
     KeyValue(&'a str, HoconValue<'a>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum HoconString<'a> {
+    Quoted(&'a str),
+    Unqouted(&'a str),
+}
+
 /// Represents a hocon value within the AST representation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HoconValue<'a> {
-    HoconString(&'a str),
+    HoconString(HoconString<'a>),
     HoconNumber(f64),
     HoconObject(Vec<HoconField<'a>>),
     HoconArray(Vec<HoconValue<'a>>),
@@ -99,7 +105,32 @@ fn whitespace<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, ()
     Ok((input, ()))
 }
 
-fn string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
+fn unquoted_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
+    take_till1(|c: char| {
+        is_hocon_whitespace(c)
+            || c == '$'
+            || c == '"'
+            || c == '{'
+            || c == '}'
+            || c == '['
+            || c == ']'
+            || c == ':'
+            || c == '='
+            || c == ','
+            || c == '+'
+            || c == '#'
+            || c == '`'
+            || c == '^'
+            || c == '?'
+            || c == '!'
+            || c == '@'
+            || c == '*'
+            || c == '&'
+            || c == '\\'
+    })(input)
+}
+
+fn quoted_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
     fn is_string_char(c: char) -> bool {
         !(c.is_alphanum() || c == '.')
     }
@@ -108,58 +139,29 @@ fn string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a st
         input.split_at_position_complete(is_string_char)
     }
 
-    fn parse_unquoted_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-        take_till1(|c: char| {
-            is_hocon_whitespace(c)
-                || c == '$'
-                || c == '"'
-                || c == '{'
-                || c == '}'
-                || c == '['
-                || c == ']'
-                || c == ':'
-                || c == '='
-                || c == ','
-                || c == '+'
-                || c == '#'
-                || c == '`'
-                || c == '^'
-                || c == '?'
-                || c == '!'
-                || c == '@'
-                || c == '*'
-                || c == '&'
-                || c == '\\'
-        })(input)
-    }
-
-    fn parse_json_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-        delimited(tag("\""), parse_str, tag("\""))(input)
-    }
-
-    alt((parse_json_string, parse_unquoted_string))(input)
+    delimited(tag("\""), parse_str, tag("\""))(input)
 }
 
 fn number<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue, E> {
     map(double, HoconValue::HoconNumber)(input)
 }
 
-fn include<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconInclusion, E> {
+fn include<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconInclusion<'a>, E> {
     let (remainder, (_, _, (_, v))) = (
         tag("include"),
         whitespace,
         alt((
             tuple((
                 tag("url"),
-                delimited(char('('), map(string, HoconInclusion::Url), char(')')),
+                delimited(char('('), map(quoted_string, HoconInclusion::Url), char(')')),
             )),
             tuple((
                 tag("file"),
-                delimited(char('('), map(string, HoconInclusion::File), char(')')),
+                delimited(char('('), map(quoted_string, HoconInclusion::File), char(')')),
             )),
             tuple((
                 tag("classpath"),
-                delimited(char('('), map(string, HoconInclusion::Classpath), char(')')),
+                delimited(char('('), map(quoted_string, HoconInclusion::Classpath), char(')')),
             )),
         )),
     )
@@ -175,7 +177,8 @@ fn parse_value<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, H
         number,
         array,
         parse_object,
-        map(string, HoconValue::HoconString),
+        map(unquoted_string, |v| HoconValue::HoconString(HoconString::Unqouted(v))),
+        map(quoted_string, |v| HoconValue::HoconString(HoconString::Quoted(v))),
     ))(input)
 }
 
@@ -190,7 +193,7 @@ fn key_value<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (&'
 
     let (input, (_, path, _, _, _, value, _)) = (
         whitespace,
-        string,
+        alt((quoted_string, unquoted_string)),
         whitespace,
         separator,
         whitespace,
@@ -264,13 +267,25 @@ mod tests {
     }
 
     #[test]
-    fn test_string() {
-        assert_eq!(string::<VerboseError<&str>>("test"), Ok(("", "test")));
+    fn test_unquoted_string() {
+        assert_eq!(unquoted_string::<VerboseError<&str>>("test"), Ok(("", "test")));
+    }
+
+    #[ignore]
+    #[test]
+    fn test_unquoted_string_with_trailing_comment() {
+        assert_eq!(unquoted_string::<VerboseError<&str>>("test // hello"), Ok(("// hello", "test")));
     }
 
     #[test]
     fn test_quoted_string() {
-        assert_eq!(string::<VerboseError<&str>>("\"test\""), Ok(("", "test")));
+        assert_eq!(quoted_string::<VerboseError<&str>>("\"test\""), Ok(("", "test")));
+    }
+
+    #[ignore]
+    #[test]
+    fn test_quoted_string_with_escaped_quote() {
+        assert_eq!(quoted_string::<VerboseError<&str>>("\"testy \\\" test\""), Ok(("", "testy \" test")));
     }
 
     #[test]
@@ -318,7 +333,7 @@ mod tests {
     #[test]
     fn parse_basic_json_object() {
         let content = r#"{ "hello": "world" }"#;
-        let expected = vec![HoconField::KeyValue("hello", HoconValue::HoconString("world"))];
+        let expected = vec![HoconField::KeyValue("hello", HoconValue::HoconString(HoconString::Quoted("world")))];
         assert_eq!(
             parse::<VerboseError<&str>>(content),
             Ok(HoconValue::HoconObject(expected))
@@ -329,8 +344,8 @@ mod tests {
     fn parse_json_object_with_two_keys() {
         let content = r#"{ "hello": "world", "world": "hello" }"#;
         let expected = vec![
-            HoconField::KeyValue("hello", HoconValue::HoconString("world")),
-            HoconField::KeyValue("world", HoconValue::HoconString("hello")),
+            HoconField::KeyValue("hello", HoconValue::HoconString(HoconString::Quoted("world"))),
+            HoconField::KeyValue("world", HoconValue::HoconString(HoconString::Quoted("hello"))),
         ];
         assert_eq!(
             parse::<VerboseError<&str>>(content),
@@ -345,8 +360,8 @@ mod tests {
             "world": "hello"
         }"#;
         let expected = vec![
-            HoconField::KeyValue("hello", HoconValue::HoconString("world")),
-            HoconField::KeyValue("world", HoconValue::HoconString("hello")),
+            HoconField::KeyValue("hello", HoconValue::HoconString(HoconString::Quoted("world"))),
+            HoconField::KeyValue("world", HoconValue::HoconString(HoconString::Quoted("hello"))),
         ];
         assert_eq!(
             parse::<VerboseError<&str>>(content),
@@ -361,8 +376,8 @@ mod tests {
             world: "hello"
         }"#;
         let expected = vec![
-            HoconField::KeyValue("hello", HoconValue::HoconString("world")),
-            HoconField::KeyValue("world", HoconValue::HoconString("hello")),
+            HoconField::KeyValue("hello", HoconValue::HoconString(HoconString::Quoted("world"))),
+            HoconField::KeyValue("world", HoconValue::HoconString(HoconString::Quoted("hello"))),
         ];
         assert_eq!(
             parse::<VerboseError<&str>>(content),
@@ -384,7 +399,7 @@ mod tests {
         "#;
         let expected = vec![
             HoconField::Include(HoconInclusion::File("test.conf")),
-            HoconField::KeyValue("hello", HoconValue::HoconString("world")),
+            HoconField::KeyValue("hello", HoconValue::HoconString(HoconString::Quoted("world"))),
         ];
         assert_eq!(
             parse::<VerboseError<&str>>(content),
