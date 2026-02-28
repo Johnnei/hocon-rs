@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_till1, take_while},
-    character::complete::char,
-    combinator::{all_consuming, map, opt, peek, value},
+    character::{anychar, complete::char},
+    combinator::{all_consuming, map, not, opt, peek, recognize, value, verify},
     error::ParseError,
     multi::{many0, many1, separated_list0},
     number::complete::double,
@@ -107,28 +107,33 @@ fn whitespace<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, ()
 }
 
 fn unquoted_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-    take_till1(|c: char| {
-        is_hocon_whitespace(c)
-            || c == '$'
-            || c == '"'
-            || c == '{'
-            || c == '}'
-            || c == '['
-            || c == ']'
-            || c == ':'
-            || c == '='
-            || c == ','
-            || c == '+'
-            || c == '#'
-            || c == '`'
-            || c == '^'
-            || c == '?'
-            || c == '!'
-            || c == '@'
-            || c == '*'
-            || c == '&'
-            || c == '\\'
-    })(input)
+    recognize(many1((
+        not(peek(tag("//"))),
+        not(peek(verify(anychar, |&c| {
+            is_hocon_whitespace(c)
+                || c == '$'
+                || c == '"'
+                || c == '{'
+                || c == '}'
+                || c == '['
+                || c == ']'
+                || c == ':'
+                || c == '='
+                || c == ','
+                || c == '+'
+                || c == '#'
+                || c == '`'
+                || c == '^'
+                || c == '?'
+                || c == '!'
+                || c == '@'
+                || c == '*'
+                || c == '&'
+                || c == '\\'
+        }))),
+        anychar,
+    )))
+    .parse(input)
 }
 
 fn quoted_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
@@ -180,7 +185,8 @@ fn parse_value<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, H
         parse_object,
         map(unquoted_string, |v| HoconValue::HoconString(HoconString::Unqouted(v))),
         map(quoted_string, |v| HoconValue::HoconString(HoconString::Quoted(v))),
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 fn next_element_whitespace<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (), E> {
@@ -209,7 +215,8 @@ fn object_field<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, 
     alt((
         map(include, HoconField::Include),
         map(key_value, |(k, v)| HoconField::KeyValue(k, v)),
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 fn array<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
@@ -227,7 +234,8 @@ fn array<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconVa
             HoconValue::HoconArray,
         ),
         char(']'),
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 fn parse_object<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
@@ -281,12 +289,19 @@ mod tests {
         assert_eq!(unquoted_string::<VerboseError<&str>>("test"), Ok(("", "test")));
     }
 
-    #[ignore]
     #[test]
-    fn test_unquoted_string_with_trailing_comment() {
+    fn test_unquoted_string_with_trailing_slash_comment() {
         assert_eq!(
-            unquoted_string::<VerboseError<&str>>("test // hello"),
+            unquoted_string::<VerboseError<&str>>("test// hello"),
             Ok(("// hello", "test"))
+        );
+    }
+
+    #[test]
+    fn test_unquoted_string_with_trailing_pound_comment() {
+        assert_eq!(
+            unquoted_string::<VerboseError<&str>>("test# hello"),
+            Ok(("# hello", "test"))
         );
     }
 
