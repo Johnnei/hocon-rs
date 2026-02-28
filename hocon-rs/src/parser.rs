@@ -5,12 +5,13 @@ use nom::{
     bytes::complete::{tag, take_till1, take_while},
     character::complete::char,
     combinator::{all_consuming, map, opt, peek, value},
-    error::{convert_error, ParseError},
+    error::ParseError,
     multi::{many0, many1, separated_list0},
     number::complete::double,
-    sequence::{delimited, preceded, terminated, tuple, Tuple},
-    AsChar, IResult, InputTakeAtPosition,
+    sequence::{delimited, preceded, terminated},
+    AsChar, IResult, Input, Parser,
 };
+use nom_language::error::convert_error;
 use thiserror::Error;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +60,7 @@ pub enum HoconError {
 
 /// Parses the given input as a Hocon document into a Hocon AST.
 pub fn parse<'a, E: ParseError<&'a str>>(input: &'a str) -> Result<HoconValue<'a>, HoconError> {
-    let r = alt((empty_content, parse_object))(input);
+    let r = alt((empty_content, parse_object)).parse(input);
     match r {
         Ok((_, value)) => Ok(value),
         Err(nom::Err::Error(e)) => {
@@ -73,7 +74,7 @@ pub fn parse<'a, E: ParseError<&'a str>>(input: &'a str) -> Result<HoconValue<'a
 }
 
 fn empty_content<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
-    map(all_consuming(whitespace), |_| HoconValue::HoconObject(vec![]))(input)
+    map(all_consuming(whitespace), |_| HoconValue::HoconObject(vec![])).parse(input)
 }
 
 fn null<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
@@ -84,7 +85,7 @@ fn null<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconVal
 fn boolean<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
     let parse_true = value(HoconValue::HoconBoolean(true), tag("true"));
     let parse_false = value(HoconValue::HoconBoolean(false), tag("false"));
-    alt((parse_true, parse_false))(input)
+    alt((parse_true, parse_false)).parse(input)
 }
 
 fn is_hocon_whitespace(c: char) -> bool {
@@ -139,11 +140,11 @@ fn quoted_string<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str,
         input.split_at_position_complete(is_string_char)
     }
 
-    delimited(tag("\""), parse_str, tag("\""))(input)
+    delimited(tag("\""), parse_str, tag("\"")).parse(input)
 }
 
 fn number<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
-    map(double, HoconValue::HoconNumber)(input)
+    map(double, HoconValue::HoconNumber).parse(input)
 }
 
 fn include<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconInclusion<'a>, E> {
@@ -151,18 +152,18 @@ fn include<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, Hocon
         tag("include"),
         whitespace,
         alt((
-            tuple((
+            (
                 tag("url"),
                 delimited(char('('), map(quoted_string, HoconInclusion::Url), char(')')),
-            )),
-            tuple((
+            ),
+            (
                 tag("file"),
                 delimited(char('('), map(quoted_string, HoconInclusion::File), char(')')),
-            )),
-            tuple((
+            ),
+            (
                 tag("classpath"),
                 delimited(char('('), map(quoted_string, HoconInclusion::Classpath), char(')')),
-            )),
+            ),
         )),
     )
         .parse(input)?;
@@ -179,16 +180,16 @@ fn parse_value<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, H
         parse_object,
         map(unquoted_string, |v| HoconValue::HoconString(HoconString::Unqouted(v))),
         map(quoted_string, |v| HoconValue::HoconString(HoconString::Quoted(v))),
-    ))(input)
+    )).parse(input)
 }
 
 fn next_element_whitespace<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (), E> {
-    map(tuple((whitespace, opt(char(',')))), |_| ())(input)
+    map((whitespace, opt(char(','))), |_| ()).parse(input)
 }
 
 fn key_value<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (&'a str, HoconValue<'a>), E> {
     fn separator<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (), E> {
-        map(alt((char(':'), char('='), peek(char('{')))), |_| ())(input)
+        map(alt((char(':'), char('='), peek(char('{')))), |_| ()).parse(input)
     }
 
     let (input, (_, path, _, _, _, value, _)) = (
@@ -208,12 +209,12 @@ fn object_field<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, 
     alt((
         map(include, HoconField::Include),
         map(key_value, |(k, v)| HoconField::KeyValue(k, v)),
-    ))(input)
+    )).parse(input)
 }
 
 fn array<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
     fn array_element<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
-        preceded(whitespace, parse_value)(input)
+        preceded(whitespace, parse_value).parse(input)
     }
 
     delimited(
@@ -226,25 +227,25 @@ fn array<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconVa
             HoconValue::HoconArray,
         ),
         char(']'),
-    )(input)
+    ).parse(input)
 }
 
 fn parse_object<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
     fn parse_inner0<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
-        map(many0(object_field), HoconValue::HoconObject)(input)
+        map(many0(object_field), HoconValue::HoconObject).parse(input)
     }
 
     fn parse_inner1<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, HoconValue<'a>, E> {
-        map(many1(object_field), HoconValue::HoconObject)(input)
+        map(many1(object_field), HoconValue::HoconObject).parse(input)
     }
 
-    alt((delimited(char('{'), parse_inner0, char('}')), parse_inner1))(input)
+    alt((delimited(char('{'), parse_inner0, char('}')), parse_inner1)).parse(input)
 }
 
 #[cfg(test)]
 mod tests {
 
-    use nom::error::VerboseError;
+    use nom_language::error::VerboseError;
 
     use super::*;
     use crate::parser::HoconValue;

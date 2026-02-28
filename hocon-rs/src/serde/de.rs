@@ -1,6 +1,6 @@
 use core::fmt;
 
-use nom::error::VerboseError;
+use nom_language::error::VerboseError;
 use serde::de::{self, DeserializeOwned, Deserializer, MapAccess, Visitor};
 
 use crate::parser::{HoconError, HoconField, HoconString, HoconValue};

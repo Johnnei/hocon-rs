@@ -1,9 +1,10 @@
-use std::{collections::HashMap, error::Error};
+use std::error::Error;
 
-use hocon_rs::parser::{parse, HoconValue};
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
-use lsp_types::{notification::DidOpenTextDocument, request::GotoDefinition, GotoDefinitionResponse, InitializeParams, OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind};
-use nom::error::VerboseError;
+use lsp_types::{
+    notification::DidOpenTextDocument, request::GotoDefinition, GotoDefinitionResponse, InitializeParams, OneOf,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+};
 use workspace::Workspace;
 
 mod workspace;
@@ -73,24 +74,21 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
             Message::Response(resp) => {
                 eprintln!("got response: {resp:?}");
             }
-            Message::Notification(not) => {
-                match cast_notification::<DidOpenTextDocument>(not) {
-                    Ok(params) => {
-                        eprintln!("opened file: {params:?}");
-                        match workspace.open_file(params.text_document.uri.path().to_string(), params.text_document.text) {
-                            Ok(()) => {
-                            },
-                            Err(err) => {
-                                let path = params.text_document.uri.path();
-                                eprintln!("parse failure on {path:?}: {err:?}");
-                            }
+            Message::Notification(not) => match cast_notification::<DidOpenTextDocument>(not) {
+                Ok(params) => {
+                    eprintln!("opened file: {params:?}");
+                    match workspace.open_file(params.text_document.uri.path().to_string(), params.text_document.text) {
+                        Ok(()) => {}
+                        Err(err) => {
+                            let path = params.text_document.uri.path();
+                            eprintln!("parse failure on {path:?}: {err:?}");
                         }
                     }
-                    Err(err) => {
-                        eprintln!("got notification: {err:?}");
-                    }
                 }
-            }
+                Err(err) => {
+                    eprintln!("got notification: {err:?}");
+                }
+            },
         }
     }
     Ok(())
